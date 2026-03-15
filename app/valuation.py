@@ -364,14 +364,14 @@ def calculate_earnings_track_valuation(params):
             eps_array = metrics_data['series']['annual']['eps']
             if isinstance(eps_array, list):
                 for i in range(min(5, len(eps_array))):
-                    if eps_array[i] and 'v' in eps_array[i]:
+                    if eps_array[i] and 'v' in eps_array[i] and eps_array[i]['v'] is not None:
                         eps_series.append(float(eps_array[i]['v']))
         
         if 'annual' in metrics_data['series'] and 'pe' in metrics_data['series']['annual']:
             pe_array = metrics_data['series']['annual']['pe']
             if isinstance(pe_array, list):
                 for i in range(min(5, len(pe_array))):
-                    if pe_array[i] and 'v' in pe_array[i]:
+                    if pe_array[i] and 'v' in pe_array[i] and pe_array[i]['v'] is not None:
                         pe_series.append(float(pe_array[i]['v']))
         
         # Validate data
@@ -515,14 +515,14 @@ def calculate_asset_based_valuation(params):
             roe_array = metrics_data['series']['annual']['roe']
             if isinstance(roe_array, list):
                 for i in range(min(5, len(roe_array))):
-                    if roe_array[i] and 'v' in roe_array[i]:
+                    if roe_array[i] and 'v' in roe_array[i] and roe_array[i]['v'] is not None:
                         roe_series.append(float(roe_array[i]['v']))
         
         if 'annual' in metrics_data['series'] and 'pb' in metrics_data['series']['annual']:
             pb_array = metrics_data['series']['annual']['pb']
             if isinstance(pb_array, list):
                 for i in range(min(5, len(pb_array))):
-                    if pb_array[i] and 'v' in pb_array[i]:
+                    if pb_array[i] and 'v' in pb_array[i] and pb_array[i]['v'] is not None:
                         pb_series.append(float(pb_array[i]['v']))
         
         # Validate data
@@ -644,61 +644,90 @@ def calculate_dividend_valuation(params):
             return result
         
         # STEP 3: Get earnings history to determine fiscal year
-        earnings_data = None
-        try:
-            earnings_url = f'https://www.alphavantage.co/query?function=EARNINGS&symbol={symbol}&apikey={alpha_vantage_api_key}'
-            earnings_data = fetch_alpha_vantage(earnings_url)
-        except Exception as earnings_error:
-            result['warnings'].append(f'Failed to fetch EARNINGS data from Alpha Vantage: {str(earnings_error)}')
-            return result
-        
-        # Build fiscal year end dates
         fiscal_year_ends = []
         
-        if earnings_data and 'annualEarnings' in earnings_data and isinstance(earnings_data['annualEarnings'], list):
-            annual_earnings_array = earnings_data['annualEarnings']
-            for earning in annual_earnings_array:
-                if 'fiscalDateEnding' in earning:
-                    fiscal_year_ends.append(earning['fiscalDateEnding'])
-        else:
-            result_keys = list(earnings_data.keys()) if earnings_data else []
-            diag_info = f'EARNINGS API returned unexpected structure. Available keys: [{", ".join(result_keys)}]'
+        try:
+            # Use Finnhub API to get fiscal year end dates (avoids Alpha Vantage rate limiting)
+            metrics_url = f'https://finnhub.io/api/v1/stock/metric?symbol={symbol}&metric=series&token={finnhub_api_key}'
+            metrics_series_data = fetch_finnhub(metrics_url)
             
-            if earnings_data and 'Information' in earnings_data:
-                diag_info += f' | Information: {earnings_data["Information"]}'
-            if earnings_data and 'message' in earnings_data:
-                diag_info += f' | Message: {earnings_data["message"]}'
-            
-            result['warnings'].append(diag_info)
+            # Extract fiscal year ends from any annual series data
+            if 'series' in metrics_series_data and 'annual' in metrics_series_data['series']:
+                annual_data = metrics_series_data['series']['annual']
+                # Get periods from the first available annual metric with valid data
+                for metric_name, metric_array in annual_data.items():
+                    if isinstance(metric_array, list) and len(metric_array) > 0:
+                        for item in metric_array:
+                            if 'period' in item and item['period']:
+                                fiscal_year_ends.append(item['period'])
+                        # Use the first metric's periods
+                        if len(fiscal_year_ends) > 0:
+                            break
+                
+                # Sort fiscal year ends in chronological order
+                fiscal_year_ends = sorted(list(set(fiscal_year_ends)))
+        except Exception as error:
+            result['warnings'].append(f'Failed to fetch fiscal year dates from Finnhub: {str(error)}')
+            return result
         
         if len(fiscal_year_ends) == 0:
-            result['warnings'].append('No fiscal year end dates found from earnings data; cannot properly consolidate dividends by fiscal year')
+            result['warnings'].append('No fiscal year end dates found from Finnhub; cannot properly consolidate dividends by fiscal year')
             return result
         
         # STEP 4: Consolidate dividends by fiscal year
         dividends_by_fiscal_year = {}
         
+        # Log available fields from first dividend for debugging
+        if dividend_data.get('data') and len(dividend_data['data']) > 0:
+            first_dividend_keys = list(dividend_data['data'][0].keys())
+            result['warnings'].append(f'Dividend data structure - available fields: {first_dividend_keys}')
+        
         for dividend in dividend_data['data']:
-            if 'amount' in dividend and 'ex_date' in dividend:
-                amount = float(dividend['amount'])
-                if isinstance(amount, (int, float)) and amount > 0:
-                    dividend_date = datetime.strptime(dividend['ex_date'], '%Y-%m-%d')
-                    
-                    for fiscal_year_end in fiscal_year_ends:
-                        fiscal_end_date = datetime.strptime(fiscal_year_end, '%Y-%m-%d')
-                        one_year_before = fiscal_end_date - timedelta(days=365)
+            if 'amount' in dividend and 'ex_dividend_date' in dividend:
+                try:
+                    amount = float(dividend['amount'])
+                    if isinstance(amount, (int, float)) and amount > 0:
+                        dividend_date = datetime.strptime(dividend['ex_dividend_date'], '%Y-%m-%d')
                         
-                        if one_year_before < dividend_date <= fiscal_end_date:
-                            if fiscal_year_end not in dividends_by_fiscal_year:
-                                dividends_by_fiscal_year[fiscal_year_end] = 0
-                            dividends_by_fiscal_year[fiscal_year_end] += amount
-                            break
+                        # Find the fiscal year end that this dividend belongs to
+                        matched = False
+                        for fiscal_year_end in fiscal_year_ends:
+                            try:
+                                fiscal_end_date = datetime.strptime(fiscal_year_end, '%Y-%m-%d')
+                                one_year_before = fiscal_end_date - timedelta(days=365)
+                                
+                                if one_year_before < dividend_date <= fiscal_end_date:
+                                    if fiscal_year_end not in dividends_by_fiscal_year:
+                                        dividends_by_fiscal_year[fiscal_year_end] = 0
+                                    dividends_by_fiscal_year[fiscal_year_end] += amount
+                                    matched = True
+                                    break
+                            except ValueError:
+                                # Skip malformed dates
+                                continue
+                except (ValueError, TypeError) as e:
+                    # Skip dividends with invalid amount or date format
+                    continue
+            else:
+                # Log available fields if expected fields are missing
+                if dividend:
+                    result['warnings'].append(f'Dividend record missing expected fields (amount or ex_dividend_date). Available: {list(dividend.keys())}')
         
         # Get sorted fiscal years
         sorted_fiscal_years = sorted(dividends_by_fiscal_year.keys())
         
         if len(sorted_fiscal_years) < 5:
-            result['warnings'].append(f'Insufficient historical dividend data available (only {len(sorted_fiscal_years)} fiscal years instead of 5)')
+            # Build diagnostic message safely
+            dividend_date_range = "N/A"
+            if dividend_data.get('data'):
+                try:
+                    earliest = dividend_data['data'][-1].get('ex_dividend_date', 'N/A')
+                    latest = dividend_data['data'][0].get('ex_dividend_date', 'N/A')
+                    dividend_date_range = f"{earliest} to {latest}"
+                except (IndexError, KeyError, TypeError):
+                    dividend_date_range = "Unable to determine"
+            
+            result['warnings'].append(f'Insufficient historical dividend data available (only {len(sorted_fiscal_years)} fiscal years instead of 5). Fiscal years matched: {sorted_fiscal_years}. Dividend dates range: {dividend_date_range}')
             return result
         
         # Extract last 5 fiscal years
