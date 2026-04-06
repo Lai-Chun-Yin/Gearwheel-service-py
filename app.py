@@ -20,7 +20,8 @@ from app.valuation import (
     calculate_stock_valuation,
     calculate_earnings_track_valuation,
     calculate_asset_based_valuation,
-    calculate_dividend_valuation
+    calculate_dividend_valuation,
+    fetch_financial_data
 )
 
 load_dotenv()
@@ -148,6 +149,38 @@ def api_docs():
                     'status': 'string',
                     'timestamp': 'string',
                     'uptime': 'number'
+                }
+            },
+            'GET /api/data': {
+                'description': 'Fetch comprehensive financial data from Finnhub API',
+                'requestBody': {
+                    'required': ['symbol'],
+                    'optional': ['finnhubApiKey'],
+                    'notes': [
+                        'finnhubApiKey: provide in request OR set FINNHUB_API_KEY environment variable',
+                        'Returns: Financials Reported (balance sheet, income statement, cash flow) and Basic Financials (EPS, ROE)'
+                    ],
+                    'exampleWithApiKey': {
+                        'symbol': 'AAPL',
+                        'finnhubApiKey': 'your-key'
+                    },
+                    'exampleWithEnvironmentVar': {
+                        'symbol': 'AAPL'
+                    }
+                },
+                'response': {
+                    'symbol': 'string',
+                    'timestamp': 'string',
+                    'financialsReported': {
+                        'balanceSheet': 'array',
+                        'incomeStatement': 'array',
+                        'cashFlow': 'array'
+                    },
+                    'basicFinancials': {
+                        'eps': 'array',
+                        'roe': 'array'
+                    },
+                    'warnings': 'string[]'
                 }
             },
             'GET /api/docs': {
@@ -459,6 +492,43 @@ def valuation_batch():
         }), 500
 
 
+@app.route('/api/data', methods=['GET'])
+def fetch_data():
+    """
+    Fetch comprehensive financial data from Finnhub API
+    GET /api/data
+    """
+    try:
+        symbol = request.args.get('symbol')
+        finnhub_api_key = request.args.get('finnhubApiKey') or os.getenv('FINNHUB_API_KEY')
+
+        # Validate required fields
+        if not symbol or not finnhub_api_key:
+            return jsonify({
+                'error': 'Bad Request',
+                'message': 'Missing required fields: symbol is required, and finnhubApiKey must be provided in request or FINNHUB_API_KEY environment variable',
+                'receivedFields': {
+                    'symbol': 'provided' if symbol else 'missing',
+                    'finnhubApiKey': 'provided in query' if request.args.get('finnhubApiKey') else ('using environment variable' if os.getenv('FINNHUB_API_KEY') else 'missing')
+                }
+            }), 400
+
+        result = fetch_financial_data({
+            'symbol': symbol.upper(),
+            'finnhubApiKey': finnhub_api_key
+        })
+
+        return jsonify(result)
+
+    except Exception as error:
+        print(f'Financial data fetch error: {error}')
+        return jsonify({
+            'error': 'Internal Server Error',
+            'message': str(error),
+            'timestamp': datetime.now().isoformat()
+        }), 500
+
+
 @app.errorhandler(404)
 def not_found(error):
     """404 handler"""
@@ -468,6 +538,7 @@ def not_found(error):
         'availableEndpoints': [
             'GET /health',
             'GET /api/docs',
+            'GET /api/data',
             'GET /api/valuation/peg',
             'GET /api/valuation/peg/batch',
             'GET /api/valuation/earning_track',

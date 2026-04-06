@@ -804,3 +804,271 @@ def calculate_dividend_valuation(params):
     except Exception as error:
         result['warnings'].append(f'Error during dividend valuation: {str(error)}')
         return result
+
+
+def fetch_financial_data(params):
+    """
+    Fetch comprehensive financial data from Finnhub API
+    
+    Args:
+        params: Dictionary with keys:
+            - symbol: Stock symbol
+            - finnhubApiKey: Finnhub API key
+    
+    Returns:
+        Dictionary with organized financial data including:
+        - financialsReported: Balance sheet, cash flow, and income statement data
+        - basicFinancials: EPS and ROE series
+    """
+    symbol = params['symbol']
+    finnhub_api_key = params['finnhubApiKey']
+    
+    result = {
+        'symbol': symbol,
+        'timestamp': datetime.now().isoformat(),
+        'financialsReported': {
+            'balanceSheet': [],
+            'incomeStatement': [],
+            'cashFlow': []
+        },
+        'basicFinancials': {
+            'eps': [],
+            'roe': []
+        },
+        'warnings': []
+    }
+    
+    try:
+        # Fetch Financials Reported data
+        financials_url = f'https://finnhub.io/api/v1/stock/financials-reported?symbol={symbol}&freq=annual&token={finnhub_api_key}'
+        financials_data = None
+        financials_error = None
+        
+        try:
+            financials_data = fetch_finnhub(financials_url)
+        except Exception as e:
+            financials_error = str(e)
+            result['warnings'].append(f'Error fetching financials-reported: {financials_error}')
+        
+        if financials_data:
+            # Check if response has expected structure
+            if 'data' in financials_data and isinstance(financials_data['data'], list) and len(financials_data['data']) > 0:
+                data_extracted = False
+                for filing in financials_data['data']:
+                    if 'report' in filing and isinstance(filing['report'], dict):
+                        report = filing['report']
+                        fiscal_date = filing.get('endDate', 'N/A')
+                        
+                        # Extract Balance Sheet data - handle both dict and list formats
+                        # if 'bs' in report:
+                        #     bs_data = report['bs']
+                        #     if isinstance(bs_data, (dict, list)):
+                        #         result['financialsReported']['balanceSheet'].append({
+                        #             'fiscalDate': fiscal_date,
+                        #             'data': bs_data
+                        #         })
+                        #         data_extracted = True
+                        
+                        # Extract Income Statement data - handle both dict and list formats
+                        # if 'ic' in report:
+                        #     ic_data = report['ic']
+                        #     if isinstance(ic_data, (dict, list)):
+                        #         result['financialsReported']['incomeStatement'].append({
+                        #             'fiscalDate': fiscal_date,
+                        #             'data': ic_data
+                        #         })
+                        #         data_extracted = True
+                        
+                        # Extract Cash Flow Statement data with specific concepts (CFO, CFI, CFF only)
+                        if 'cf' in report:
+                            cf_data = report['cf']
+                            if isinstance(cf_data, (dict, list)):
+                                filtered_cf = {}
+                                
+                                # Map common concept names to user-friendly names
+                                concept_mapping = {
+                                    'us-gaap_NetCashProvidedByUsedInOperatingActivities': 'operatingActivities',
+                                    'us-gaap_NetCashProvidedByUsedInInvestingActivities': 'investingActivities',
+                                    'us-gaap_NetCashProvidedByUsedInFinancingActivities': 'financingActivities',
+                                    'NetCashProvidedByOperatingActivities': 'operatingActivities',
+                                    'NetCashUsedInInvestingActivities': 'investingActivities',
+                                    'NetCashUsedInFinancingActivities': 'financingActivities',
+                                    'NetCashProvidedByFinancingActivities': 'financingActivities',
+                                    'OperatingActivities': 'operatingActivities',
+                                    'InvestingActivities': 'investingActivities',
+                                    'FinancingActivities': 'financingActivities'
+                                }
+                                
+                                # If cf_data is a dict, extract concept values directly
+                                if isinstance(cf_data, dict):
+                                    for concept_key, user_name in concept_mapping.items():
+                                        if concept_key in cf_data:
+                                            filtered_cf[user_name] = cf_data[concept_key]
+                                
+                                # If cf_data is a list, filter items by concept
+                                elif isinstance(cf_data, list):
+                                    for item in cf_data:
+                                        if isinstance(item, dict):
+                                            # Check if item has a concept field that matches our mapping
+                                            item_concept = item.get('concept', '')
+                                            if item_concept in concept_mapping:
+                                                user_name = concept_mapping[item_concept]
+                                                item_value = item.get('value')
+                                                if item_value is not None:
+                                                    filtered_cf[user_name] = item_value
+                                
+                                # Only include if we found at least one cash flow component
+                                if filtered_cf:
+                                    result['financialsReported']['cashFlow'].append({
+                                        'fiscalDate': fiscal_date,
+                                        'data': filtered_cf
+                                    })
+                                    data_extracted = True
+                
+                if not data_extracted:
+                    # Data list exists but no report found or reports not dictionaries
+                    first_filing_keys = list(financials_data['data'][0].keys()) if financials_data['data'] else []
+                    first_report = financials_data['data'][0].get('report', {}) if financials_data['data'] else {}
+                    first_report_keys = list(first_report.keys()) if isinstance(first_report, dict) else []
+                    
+                    # Check if report exists but is empty or malformed
+                    report_info = ""
+                    if first_report:
+                        for key in ['bs', 'ic', 'cf']:
+                            if key in first_report:
+                                report_info += f"{key}: {type(first_report[key]).__name__} with {len(first_report[key]) if isinstance(first_report[key], (dict, list)) else 'N/A'} items; "
+                    
+                    result['warnings'].append(f'Financials data found but no usable content. Filing keys: {first_filing_keys}, Report keys: {first_report_keys}. {report_info}')
+            else:
+                # Provide diagnostic info about response structure
+                if financials_data:
+                    response_keys = list(financials_data.keys())
+                    data_info = f"Response keys: {response_keys}"
+                    if 'data' in financials_data:
+                        if isinstance(financials_data['data'], list):
+                            data_info += f", Data list length: {len(financials_data['data'])}"
+                            if len(financials_data['data']) > 0:
+                                data_info += f", First item keys: {list(financials_data['data'][0].keys())}"
+                        else:
+                            data_info += f", Data type: {type(financials_data['data']).__name__}"
+                    result['warnings'].append(f'No valid financials-reported data found. {data_info}')
+        else:
+            result['warnings'].append('No financials-reported data retrieved from Finnhub')
+        
+        # Fetch Basic Financials data (EPS and ROE)
+        metrics_url = f'https://finnhub.io/api/v1/stock/metric?symbol={symbol}&metric=all&token={finnhub_api_key}'
+        metrics_data = fetch_finnhub(metrics_url)
+        
+        # Try to extract from series.annual first (preferred structure)
+        eps_extracted = False
+        roe_extracted = False
+        
+        if 'series' in metrics_data and isinstance(metrics_data['series'], dict):
+            series = metrics_data['series']
+            
+            # Check for annual data structure
+            if 'annual' in series and isinstance(series['annual'], dict):
+                annual_data = series['annual']
+                
+                # Extract EPS data from different possible keys
+                for eps_key in ['epsAnnual', 'eps']:
+                    if eps_key in annual_data and isinstance(annual_data[eps_key], list):
+                        result['basicFinancials']['eps'] = [
+                            {
+                                'period': item.get('period', 'N/A'),
+                                'value': item.get('v', None)
+                            }
+                            for item in annual_data[eps_key]
+                        ]
+                        eps_extracted = len(result['basicFinancials']['eps']) > 0
+                        if eps_extracted:
+                            break
+                
+                # Extract ROE data from different possible keys
+                for roe_key in ['roeAnnual', 'roe', 'returnOnEquity']:
+                    if roe_key in annual_data and isinstance(annual_data[roe_key], list):
+                        result['basicFinancials']['roe'] = [
+                            {
+                                'period': item.get('period', 'N/A'),
+                                'value': item.get('v', None)
+                            }
+                            for item in annual_data[roe_key]
+                        ]
+                        roe_extracted = len(result['basicFinancials']['roe']) > 0
+                        if roe_extracted:
+                            break
+            
+            # Try top-level series keys as fallback
+            if not eps_extracted:
+                for eps_key in ['epsAnnual', 'eps']:
+                    if eps_key in series and isinstance(series[eps_key], dict):
+                        eps_dict = series[eps_key]
+                        if 'data' in eps_dict and isinstance(eps_dict['data'], list):
+                            result['basicFinancials']['eps'] = [
+                                {
+                                    'period': item.get('period', 'N/A'),
+                                    'value': item.get('v', None)
+                                }
+                                for item in eps_dict['data']
+                            ]
+                            eps_extracted = len(result['basicFinancials']['eps']) > 0
+                            if eps_extracted:
+                                break
+            
+            if not roe_extracted:
+                for roe_key in ['roeAnnual', 'roe', 'returnOnEquity']:
+                    if roe_key in series and isinstance(series[roe_key], dict):
+                        roe_dict = series[roe_key]
+                        if 'data' in roe_dict and isinstance(roe_dict['data'], list):
+                            result['basicFinancials']['roe'] = [
+                                {
+                                    'period': item.get('period', 'N/A'),
+                                    'value': item.get('v', None)
+                                }
+                                for item in roe_dict['data']
+                            ]
+                            roe_extracted = len(result['basicFinancials']['roe']) > 0
+                            if roe_extracted:
+                                break
+        
+        # Fallback: Try metrics (point-in-time values)
+        if 'metric' in metrics_data:
+            metric = metrics_data['metric']
+            
+            if not eps_extracted:
+                # Try different EPS keys
+                for eps_key in ['epsAnnual', 'epsTTM', 'epsExclExtraItemsTTM', 'eps']:
+                    if eps_key in metric and metric[eps_key] is not None:
+                        result['basicFinancials']['eps'].append({
+                            'period': 'current',
+                            'value': metric[eps_key],
+                            'source': eps_key
+                        })
+                        eps_extracted = True
+                        break
+            
+            if not roe_extracted:
+                # Try different ROE keys
+                for roe_key in ['roeAnnual', 'roe', 'returnOnEquity']:
+                    if roe_key in metric and metric[roe_key] is not None:
+                        result['basicFinancials']['roe'].append({
+                            'period': 'current',
+                            'value': metric[roe_key],
+                            'source': roe_key
+                        })
+                        roe_extracted = True
+                        break
+        
+        # Add detailed warnings if data not found
+        if not eps_extracted:
+            result['warnings'].append('EPS data not found in expected Finnhub response structure. Available series keys: ' + str(list(metrics_data.get('series', {}).keys()) if 'series' in metrics_data else 'N/A'))
+        
+        if not roe_extracted:
+            result['warnings'].append('ROE data not found in expected Finnhub response structure. Available metric keys: ' + str(list(metrics_data.get('metric', {}).keys())[:10]) if 'metric' in metrics_data else 'N/A')
+        
+        return result
+        
+    except Exception as error:
+        result['warnings'].append(f'Error fetching financial data: {str(error)}')
+        result['error'] = str(error)
+        return result

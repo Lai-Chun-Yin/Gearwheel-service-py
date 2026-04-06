@@ -264,30 +264,113 @@ curl "http://localhost:3000/api/valuation/asset?symbol=JPM&finnhubApiKey=YOUR_KE
 
 ---
 
-### 7. Dividend Valuation
+### 7. Financial Data
 
-Calculate fair value for dividend-paying stocks using the Dividend Discount Model.
+Fetch comprehensive financial data from Finnhub, including balance sheet, income statement, cash flow statements, and annual financial metrics (EPS, ROE).
 
-**Endpoint:** `GET /api/valuation/dividend`
+**Endpoint:** `GET /api/data`
 
 **Query Parameters:**
 
 | Parameter | Type | Required | Default | Notes |
 |-----------|------|----------|---------|-------|
-| `symbol` | string | ✅ Yes | - | Stock ticker symbol |
-| `finnhubApiKey` | string | ✅ Yes* | - | Finnhub API key |
-| `alphaVantageApiKey` | string | ✅ Yes* | - | **REQUIRED** - Alpha Vantage API key (dividend history) |
-| `market` | string | ❌ No | US | Market: "US" or "HK" |
-| `marketGrowthRatePercent` | float | ❌ No | 10 | Expected market growth rate |
+| `symbol` | string | ✅ Yes | - | Stock ticker symbol (e.g., AAPL, ULTA) |
+| `finnhubApiKey` | string | ✅ Yes* | - | Finnhub API key (or use FINNHUB_API_KEY env var) |
+
+*Can be provided via environment variable
 
 **Example Request:**
 ```bash
-curl "http://localhost:3000/api/valuation/dividend?symbol=JNJ&finnhubApiKey=YOUR_KEY&alphaVantageApiKey=YOUR_KEY"
+curl "http://localhost:3000/api/data?symbol=AAPL&finnhubApiKey=YOUR_KEY"
 ```
 
-**Note:** This endpoint requires both API keys. It retrieves dividend history which is essential for the calculation.
+**Response Structure:**
+```json
+{
+  "symbol": "AAPL",
+  "timestamp": "2026-04-06T16:30:00.123456",
+  "financialsReported": {
+    "balanceSheet": [
+      {
+        "fiscalDate": "2024-09-28",
+        "data": {
+          "totalAssets": 123456789,
+          "totalLiabilities": 987654321,
+          ...
+        }
+      }
+    ],
+    "incomeStatement": [
+      {
+        "fiscalDate": "2024-09-28",
+        "data": {
+          "revenue": 383285000000,
+          "netIncome": 93736000000,
+          ...
+        }
+      }
+    ],
+    "cashFlow": [
+      {
+        "fiscalDate": "2024-09-28",
+        "data": {
+          "operatingActivities": 110543000000,
+          "investingActivities": -24000000000,
+          "financingActivities": -45000000000
+        }
+      }
+    ]
+  },
+  "basicFinancials": {
+    "eps": [
+      {
+        "period": "2024-09-28",
+        "value": 6.05
+      },
+      {
+        "period": "2023-09-30",
+        "value": 5.61
+      }
+    ],
+    "roe": [
+      {
+        "period": "2024-09-28",
+        "value": 85.5
+      },
+      {
+        "period": "2023-09-30",
+        "value": 75.2
+      }
+    ]
+  },
+  "warnings": []
+}
+```
+
+**Data Breakdown:**
+
+1. **Financials Reported (from `/stock/financials-reported`)**
+   - **Balance Sheet (bs)**: Currently empty (for future expansion)
+   - **Income Statement (ic)**: Currently empty (for future expansion)
+   - **Cash Flow (cf)**: Three key streams extracted:
+     - `operatingActivities`: Cash flow from normal business operations
+     - `investingActivities`: Cash flow from capital investments
+     - `financingActivities`: Cash flow from borrowing/equity transactions
+
+2. **Basic Financials (from `/stock/metric`)**
+   - **EPS (Earnings Per Share)**: Annual earnings per share values
+   - **ROE (Return on Equity)**: Annual return on equity percentages
+
+**Example Complete Response for ULTA:**
+```bash
+curl "http://localhost:3000/api/data?symbol=ULTA&finnhubApiKey=YOUR_KEY"
+```
+
+Response includes 5+ years of historical financial data across all financial statements and metrics, enabling comprehensive financial analysis.
 
 ---
+
+
 
 ## Valuation Methods
 
