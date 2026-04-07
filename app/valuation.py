@@ -7,6 +7,7 @@ Supports US (S&P 500) and HK (Hang Seng) markets
 import requests
 from datetime import datetime, timedelta
 import math
+import yfinance as yf
 
 
 def fetch_finnhub(url):
@@ -36,6 +37,27 @@ def fetch_alpha_vantage(url):
         return data
     except Exception as error:
         raise Exception(f'Alpha Vantage API call failed: {str(error)}')
+
+
+def fetch_price_from_yfinance(symbol):
+    """Helper function to fetch previous close price from yfinance"""
+    try:
+        ticker = yf.Ticker(symbol)
+        info = ticker.info
+        
+        # Get previous close price
+        previous_close = info.get('previousClose')
+        
+        if previous_close is None:
+            raise Exception(f'Previous close price not available for {symbol}')
+        
+        price = float(previous_close)
+        if not isinstance(price, (int, float)) or price <= 0:
+            raise Exception(f'Invalid price for {symbol}: {previous_close}')
+        
+        return price
+    except Exception as error:
+        raise Exception(f'Failed to get price from yfinance for {symbol}: {str(error)}')
 
 
 def get_market_pe(market, api_key):
@@ -71,14 +93,9 @@ def get_stock_data(symbol, finnhub_api_key):
     price = None
     pe = None
     
-    # Fetch current price via quote endpoint
+    # Fetch current price via yfinance
     try:
-        quote_url = f'https://finnhub.io/api/v1/quote?symbol={symbol}&token={finnhub_api_key}'
-        quote_data = fetch_finnhub(quote_url)
-        
-        price = float(quote_data['c'])
-        if not isinstance(price, (int, float)) or price <= 0:
-            raise Exception(f'Invalid price for {symbol}: {quote_data["c"]}')
+        price = fetch_price_from_yfinance(symbol)
     except Exception as error:
         raise Exception(f'Failed to get quote for {symbol}: {str(error)}')
     
@@ -339,13 +356,15 @@ def calculate_earnings_track_valuation(params):
     }
     
     try:
-        # Get current price
-        quote_url = f'https://finnhub.io/api/v1/quote?symbol={symbol}&token={finnhub_api_key}'
-        quote_data = fetch_finnhub(quote_url)
-        result['currentPrice'] = float(quote_data['c'])
+        # Get current price from yfinance
+        try:
+            result['currentPrice'] = fetch_price_from_yfinance(symbol)
+        except Exception as error:
+            result['warnings'].append(f'Failed to get current price from yfinance: {str(error)}')
+            return result
         
         if not isinstance(result['currentPrice'], (int, float)) or result['currentPrice'] <= 0:
-            result['warnings'].append(f'Invalid current price from Finnhub: {quote_data["c"]}')
+            result['warnings'].append(f'Invalid current price: {result["currentPrice"]}')
             return result
         
         # Get historical financial data
@@ -479,13 +498,15 @@ def calculate_asset_based_valuation(params):
     }
     
     try:
-        # Get current price
-        quote_url = f'https://finnhub.io/api/v1/quote?symbol={symbol}&token={finnhub_api_key}'
-        quote_data = fetch_finnhub(quote_url)
-        result['currentPrice'] = float(quote_data['c'])
+        # Get current price from yfinance
+        try:
+            result['currentPrice'] = fetch_price_from_yfinance(symbol)
+        except Exception as error:
+            result['warnings'].append(f'Failed to get current price from yfinance: {str(error)}')
+            return result
         
         if not isinstance(result['currentPrice'], (int, float)) or result['currentPrice'] <= 0:
-            result['warnings'].append(f'Invalid current price from Finnhub: {quote_data["c"]}')
+            result['warnings'].append(f'Invalid current price: {result["currentPrice"]}')
             return result
         
         # Get historical financial data
@@ -622,13 +643,15 @@ def calculate_dividend_valuation(params):
     }
     
     try:
-        # STEP 1: Get current price
-        quote_url = f'https://finnhub.io/api/v1/quote?symbol={symbol}&token={finnhub_api_key}'
-        quote_data = fetch_finnhub(quote_url)
-        result['currentPrice'] = float(quote_data['c'])
+        # STEP 1: Get current price from yfinance
+        try:
+            result['currentPrice'] = fetch_price_from_yfinance(symbol)
+        except Exception as error:
+            result['warnings'].append(f'Failed to get current price from yfinance: {str(error)}')
+            return result
         
         if not isinstance(result['currentPrice'], (int, float)) or result['currentPrice'] <= 0:
-            result['warnings'].append(f'Invalid current price from Finnhub: {quote_data["c"]}')
+            result['warnings'].append(f'Invalid current price: {result["currentPrice"]}')
             return result
         
         # STEP 2: Get dividend data from Alpha Vantage
